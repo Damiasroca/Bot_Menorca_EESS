@@ -20,5 +20,5 @@ def adequacio():
 principal()
 adequacio()
 database()
-print(dt_string)
+print(dt_string) #Just for logging purposes
     
