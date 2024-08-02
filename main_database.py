@@ -9,16 +9,16 @@ now = datetime.now()
 dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
 
 def adequacio():
-    with open('/your/path/to/json_processing/combinat.json', 'r', encoding="utf8") as arxiu:
+    with open('/json_processing/combinat.json', 'r', encoding="utf8") as arxiu:
         data=json.load(arxiu)
         extent_table = ExtentTable()
         table_maker = TableMaker(extent_table)
         table_maker.convert_json_objects_to_tables(data, "data")
         table_maker.show_tables(21)
-        table_maker.save_tables("/your/path/to/json_processing/combinat_per_importar.csv", export_as="csv")
+        table_maker.save_tables("/json_processing/combinat_per_importar.csv", export_as="csv")
 
 principal()
 adequacio()
 database()
-print(dt_string) #Just for logging purposes
+print(dt_string)
     
