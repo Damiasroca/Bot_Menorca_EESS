@@ -1,5 +1,5 @@
 def last():
-    with open('/path/to/municipis_original/mao.json', encoding='utf-8') as f:
+    with open('/municipis_original/mao.json', encoding='utf-8') as f:
         data = f.read(31)
     f.close()
     data1 = data.replace('{"Fecha":"','')
