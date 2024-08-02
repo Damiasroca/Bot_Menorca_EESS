@@ -1,0 +1,28 @@
+# Ignore all .log files
+*.log
+
+# Ignore node_modules directory
+node_modules/
+logs/
+venv/
+__pycache__/
+
+# Ignore environment variable files
+.env
+
+# Ignore temporary files
+*.tmp
+*.swp
+*.sh
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+persistencia_arxiu
+index.json
+recoleccio_usuaris.py
+Original_main_bot.py
+
+# Ignore build output
+dist/
+build/
