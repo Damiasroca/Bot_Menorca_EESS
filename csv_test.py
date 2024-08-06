@@ -1,7 +1,7 @@
 import pandas as pd
 
 # Path to your CSV file
-file_path = '/home/combustible/json_processing/combinat_per_importar.csvdata.csv'
+file_path = '/json_processing/combinat_per_importar.csvdata.csv'
 
 # Load the CSV file
 data = pd.read_csv(file_path)
