@@ -22,7 +22,7 @@ persistencia_arxiu
 index.json
 recoleccio_usuaris.py
 Original_main_bot.py
-csv_text.py
+csv_test.py
 
 # Ignore build output
 dist/
