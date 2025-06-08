@@ -7,6 +7,7 @@ from geopy.distance import geodesic
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import io
+import os
 
 class DataManager:
     def __init__(self):
@@ -135,7 +136,8 @@ class DataManager:
                 
                 print(f"Cleaned columns: {list(self.data.columns)}")
 
-                self.last_update_time = datetime.datetime.now()
+                # Load the actual API fetch timestamp instead of using current time
+                self._load_api_fetch_timestamp()
                 print("Data loaded successfully")
                 if self.data.empty:
                     print("Warning: 'benzineres' table is empty.")
@@ -148,6 +150,34 @@ class DataManager:
                 raise
         else:
             raise ConnectionError("Failed to establish database connection.")
+
+    def _load_api_fetch_timestamp(self):
+        """Load the actual API fetch timestamp from file."""
+        # Use relative path to be more portable - same as main_database.py
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        timestamp_file = os.path.join(script_dir, 'last_api_fetch.txt')
+        try:
+            with open(timestamp_file, 'r') as f:
+                timestamp_str = f.read().strip()
+                self.last_update_time = datetime.datetime.strptime(timestamp_str, "%d/%m/%Y %H:%M:%S")
+                print(f"Loaded API fetch timestamp: {timestamp_str}")
+        except FileNotFoundError:
+            print("API fetch timestamp file not found, using current time")
+            self.last_update_time = datetime.datetime.now()
+        except Exception as e:
+            print(f"Error loading API fetch timestamp: {e}, using current time")
+            self.last_update_time = datetime.datetime.now()
+
+    def _convert_decimal(self, value):
+        """Convert comma-decimal to dot-decimal for MySQL."""
+        if value is None or pd.isna(value):
+            return None
+        try:
+            # Convert to string and replace comma with dot
+            str_val = str(value).replace(',', '.')
+            return float(str_val)
+        except (ValueError, TypeError):
+            return None
 
     def store_daily_snapshot(self):
         """Store a daily snapshot of current prices for historical tracking."""
@@ -178,19 +208,19 @@ class DataManager:
         
         try:
             for _, row in self.data.iterrows():
-                # Use get() method to handle missing columns gracefully
+                # Use get() method to handle missing columns gracefully and convert decimals
                 cursor.execute(insert_query, (
                     today,
                     row.get('Rotulo', None),
                     row.get('Localidad', None),
                     row.get('Direccion', None),
-                    row.get('Latitud', None),
-                    row.get('Longitud_WGS84', None),
-                    row.get('Precio_Gasolina_95_E5', None),
-                    row.get('Precio_Gasoleo_A', None),
-                    row.get('Precio_Gasoleo_B', None),
-                    row.get('Precio_Gasoleo_Premium', None),
-                    row.get('Precio_Gases_Licuados_del_petroleo', None)
+                    self._convert_decimal(row.get('Latitud', None)),
+                    self._convert_decimal(row.get('Longitud_WGS84', None)),
+                    self._convert_decimal(row.get('Precio_Gasolina_95_E5', None)),
+                    self._convert_decimal(row.get('Precio_Gasoleo_A', None)),
+                    self._convert_decimal(row.get('Precio_Gasoleo_B', None)),
+                    self._convert_decimal(row.get('Precio_Gasoleo_Premium', None)),
+                    self._convert_decimal(row.get('Precio_Gases_Licuados_del_petroleo', None))
                 ))
             
             self.connection.commit()
@@ -339,11 +369,19 @@ class DataManager:
         cursor = self.connection.cursor()
         
         # Check if user already has this subscription
-        check_query = """
-        SELECT id FROM user_subscriptions 
-        WHERE user_id = %s AND fuel_type = %s AND town = %s AND is_active = TRUE
-        """
-        cursor.execute(check_query, (user_id, fuel_type, town))
+        if town is None:
+            check_query = """
+            SELECT id FROM user_subscriptions 
+            WHERE user_id = %s AND fuel_type = %s AND town IS NULL AND is_active = TRUE
+            """
+            cursor.execute(check_query, (user_id, fuel_type))
+        else:
+            check_query = """
+            SELECT id FROM user_subscriptions 
+            WHERE user_id = %s AND fuel_type = %s AND town = %s AND is_active = TRUE
+            """
+            cursor.execute(check_query, (user_id, fuel_type, town))
+        
         existing = cursor.fetchone()
         
         try:
@@ -385,15 +423,28 @@ class DataManager:
         cursor = self.connection.cursor()
         
         try:
-            update_query = """
-            UPDATE user_subscriptions 
-            SET is_active = FALSE 
-            WHERE user_id = %s AND fuel_type = %s AND town = %s AND is_active = TRUE
-            """
-            cursor.execute(update_query, (user_id, fuel_type, town))
-            self.connection.commit()
+            if town is None:
+                update_query = """
+                UPDATE user_subscriptions 
+                SET is_active = FALSE 
+                WHERE user_id = %s AND fuel_type = %s AND town IS NULL AND is_active = TRUE
+                """
+                cursor.execute(update_query, (user_id, fuel_type))
+                print(f"Removing alert for user {user_id}, fuel {fuel_type}, town=NULL")
+            else:
+                update_query = """
+                UPDATE user_subscriptions 
+                SET is_active = FALSE 
+                WHERE user_id = %s AND fuel_type = %s AND town = %s AND is_active = TRUE
+                """
+                cursor.execute(update_query, (user_id, fuel_type, town))
+                print(f"Removing alert for user {user_id}, fuel {fuel_type}, town={town}")
             
-            return cursor.rowcount > 0
+            self.connection.commit()
+            rows_affected = cursor.rowcount
+            print(f"Alert removal affected {rows_affected} rows")
+            
+            return rows_affected > 0
             
         except Error as e:
             print(f"Error removing price alert: {e}")
@@ -535,7 +586,113 @@ class DataManager:
         return self.data
 
     def get_last_update_time(self):
-        return self.last_update_time.strftime("%d/%m/%Y %H:%M:%S") if self.last_update_time else "N/A"
+        """Get the last time data was actually fetched from government APIs (not bot restart time)."""
+        if self.last_update_time:
+            return self.last_update_time.strftime("%d/%m/%Y %H:%M:%S")
+        else:
+            return "N/A - No API fetch data available"
+
+    def check_historical_data_status(self):
+        """Check the status of historical data table."""
+        if not self.connection or not self.connection.is_connected():
+            self.connect()
+            
+        cursor = self.connection.cursor()
+        
+        try:
+            # Check if historical_prices table exists
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = %s AND table_name = 'historical_prices'
+            """, (self.db_config['database'],))
+            
+            table_exists = cursor.fetchone()[0] > 0
+            
+            if not table_exists:
+                print("❌ historical_prices table does not exist")
+                return False
+                
+            # Check how many records exist
+            cursor.execute("SELECT COUNT(*) FROM historical_prices")
+            total_records = cursor.fetchone()[0]
+            
+            # Check date range
+            cursor.execute("SELECT MIN(date), MAX(date) FROM historical_prices")
+            date_range = cursor.fetchone()
+            
+            print(f"📊 Historical data status:")
+            print(f"   • Total records: {total_records}")
+            print(f"   • Date range: {date_range[0]} to {date_range[1]}" if date_range[0] else "   • No data yet")
+            
+            return total_records > 0
+            
+        except Error as e:
+            print(f"Error checking historical data status: {e}")
+            return False
+        finally:
+            cursor.close()
+
+    def force_populate_historical_data(self):
+        """Manually populate historical data from current data (for initial setup)."""
+        if not self.connection or not self.connection.is_connected():
+            self.connect()
+            
+        cursor = self.connection.cursor()
+        today = datetime.date.today()
+        
+        try:
+            # Create table if it doesn't exist
+            self.create_tables()
+            
+            # Check if we already have data for today
+            cursor.execute("SELECT COUNT(*) FROM historical_prices WHERE date = %s", (today,))
+            count = cursor.fetchone()[0]
+            
+            if count > 0:
+                print(f"Historical data for {today} already exists ({count} records)")
+                return True
+            
+            if self.data is None or self.data.empty:
+                print("❌ No current data available to populate historical data")
+                return False
+                
+            # Insert today's data
+            insert_query = """
+            INSERT INTO historical_prices 
+            (date, rotulo, localidad, direccion, latitud, longitud_wgs84, 
+             precio_gasolina_95_e5, precio_gasoleo_a, precio_gasoleo_b, 
+             precio_gasoleo_premium, precio_gases_licuados_del_petroleo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            records_inserted = 0
+            for _, row in self.data.iterrows():
+                cursor.execute(insert_query, (
+                    today,
+                    row.get('Rotulo', None),
+                    row.get('Localidad', None),
+                    row.get('Direccion', None),
+                    self._convert_decimal(row.get('Latitud', None)),
+                    self._convert_decimal(row.get('Longitud_WGS84', None)),
+                    self._convert_decimal(row.get('Precio_Gasolina_95_E5', None)),
+                    self._convert_decimal(row.get('Precio_Gasoleo_A', None)),
+                    self._convert_decimal(row.get('Precio_Gasoleo_B', None)),
+                    self._convert_decimal(row.get('Precio_Gasoleo_Premium', None)),
+                    self._convert_decimal(row.get('Precio_Gases_Licuados_del_petroleo', None))
+                ))
+                records_inserted += 1
+            
+            self.connection.commit()
+            print(f"✅ Manually populated {records_inserted} historical records for {today}")
+            return True
+            
+        except Error as e:
+            print(f"Error populating historical data: {e}")
+            self.connection.rollback()
+            return False
+        finally:
+            cursor.close()
 
     # Per estacions de servei
     def estacions_servei_extraccio_benzina_ascendent(self):

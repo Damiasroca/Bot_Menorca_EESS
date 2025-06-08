@@ -730,6 +730,103 @@ async def list_user_alerts(update: Update, context: CallbackContext):
     
     return NIVELL1
 
+@error_handler
+async def remove_alert_selection(update: Update, context: CallbackContext):
+    """Show user their alerts and let them select which one to remove."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    subscriptions = data_manager.get_user_subscriptions(user_id)
+    
+    button5 = InlineKeyboardButton(B5, callback_data=str(ALERTS))
+    
+    if subscriptions.empty:
+        await query.edit_message_text(
+            "📋 No tens cap alerta activa per eliminar.",
+            reply_markup=InlineKeyboardMarkup([[button5]])
+        )
+        return NIVELL1
+    
+    fuel_names = {
+        'BENZINA': 'Benzina 95 E5',
+        'GASOLIA': 'Gasoli A',
+        'GASOLIB': 'Gasoli B', 
+        'GASOLIP': 'Gasoli Premium',
+        'GLP': 'GLP'
+    }
+    
+    # Create buttons for each alert
+    buttons = []
+    for _, alert in subscriptions.iterrows():
+        fuel_name = fuel_names.get(alert['fuel_type'], alert['fuel_type'])
+        town_text = f" - {alert['town']}" if alert['town'] else ""
+        button_text = f"🗑️ {fuel_name}{town_text} ({alert['price_threshold']}€)"
+        
+        # Create callback data with fuel_type and town for identification
+        callback_data = f"REMOVE_CONFIRM_{alert['fuel_type']}_{alert['town'] or 'NONE'}"
+        buttons.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+    
+    buttons.append([button5])  # Back button
+    
+    await query.edit_message_text(
+        "🗑️ *Selecciona l'alerta que vols eliminar:*",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+    
+    return NIVELL3
+
+@error_handler
+async def confirm_remove_alert(update: Update, context: CallbackContext):
+    """Handle the actual removal of an alert."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse callback data: REMOVE_CONFIRM_FUEL_TOWN
+    parts = query.data.split('_', 3)
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Error processant la petició.")
+        return NIVELL1
+    
+    fuel_type = parts[2]
+    town = parts[3] if len(parts) > 3 and parts[3] != 'NONE' else None
+    
+    user_id = query.from_user.id
+    
+    # Remove the alert
+    success = data_manager.remove_price_alert(user_id, fuel_type, town)
+    
+    fuel_names = {
+        'BENZINA': 'Benzina 95 E5',
+        'GASOLIA': 'Gasoli A',
+        'GASOLIB': 'Gasoli B', 
+        'GASOLIP': 'Gasoli Premium',
+        'GLP': 'GLP'
+    }
+    
+    fuel_name = fuel_names.get(fuel_type, fuel_type)
+    town_text = f" - {town}" if town else ""
+    
+    if success:
+        await query.edit_message_text(
+            f"✅ Alerta eliminada!\n\n🔔 *{fuel_name}{town_text}*",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(B5, callback_data=str(ALERTS))
+            ]])
+        )
+    else:
+        await query.edit_message_text(
+            f"❌ No s'ha pogut eliminar l'alerta de *{fuel_name}{town_text}*.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(B5, callback_data=str(ALERTS))
+            ]])
+        )
+    
+    return NIVELL1
+
 async def check_and_send_alerts(context: CallbackContext):
     """Check for price alerts and send notifications."""
     logger.info("Checking price alerts...")
@@ -924,12 +1021,14 @@ def get_conv_handler():
                 CallbackQueryHandler(price_charts, pattern=f"^{CHART_FUEL_PREFIX}"),
                 CallbackQueryHandler(generate_chart, pattern=f"^{CHART_PREFIX}"),
                 CallbackQueryHandler(create_alert_fuel_selection, pattern=f"^{ALERT_CREATE}$"),
+                CallbackQueryHandler(remove_alert_selection, pattern=f"^{ALERT_REMOVE}$"),
                 CallbackQueryHandler(list_user_alerts, pattern=f"^{ALERT_LIST}$"),
                 CallbackQueryHandler(price_alerts, pattern=f"^{ALERTS}$"),
                 MessageHandler(filters.LOCATION, handle_location),
             ],
             NIVELL3: [
                 CallbackQueryHandler(create_alert_price_input, pattern=f"^{ALERT_CREATE}_"),
+                CallbackQueryHandler(confirm_remove_alert, pattern=f"^REMOVE_CONFIRM_"),
                 CallbackQueryHandler(price_alerts, pattern=f"^{ALERTS}$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_alert_price),
             ],

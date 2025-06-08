@@ -3,11 +3,17 @@ import numpy as np
 import mysql.connector as msql
 from mysql.connector import Error
 import datetime
+import secret
 
 def backup_current_data():
     """Backup current data to historical_prices table before updating"""
     try:
-        conn = msql.connect(host='localhost', database='menorca', user='USER', password='PASSWORD')
+        conn = msql.connect(
+            host=secret.secret['db_host'], 
+            database=secret.secret['db_name'], 
+            user=secret.secret['db_user'], 
+            password=secret.secret['db_password']
+        )
         if conn.is_connected():
             cursor = conn.cursor()
             
@@ -60,7 +66,7 @@ def backup_current_data():
                 try:
                     cursor.execute(backup_query, (today,))
                     conn.commit()
-                    print(f"Historical data backed up for {today}")
+                    print(f"✅ Historical data backed up for {today}")
                 except Error as e:
                     print(f"Note: Could not backup historical data (table might not exist yet): {e}")
             else:
@@ -98,16 +104,25 @@ def database():
         estacions_data_null[column] = pd.to_numeric(estacions_data_null[column], errors='coerce')
 
     try:
-        conn = msql.connect(host='localhost', user='USER', password='PASSWORD')
+        conn = msql.connect(
+            host=secret.secret['db_host'], 
+            user=secret.secret['db_user'], 
+            password=secret.secret['db_password']
+        )
         if conn.is_connected():
             cursor = conn.cursor()
-            cursor.execute("CREATE DATABASE IF NOT EXISTS menorca")
-            print("menorca database created")
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {secret.secret['db_name']}")
+            print(f"{secret.secret['db_name']} database created")
     except Error as e:
         print("Error connecting to MySQL during database creation:", e)
     
     try:
-        conn = msql.connect(host='localhost', database='menorca', user='USER', password='PASSWORD')
+        conn = msql.connect(
+            host=secret.secret['db_host'], 
+            database=secret.secret['db_name'], 
+            user=secret.secret['db_user'], 
+            password=secret.secret['db_password']
+        )
         if conn.is_connected():
             cursor = conn.cursor()
             cursor.execute("select database();")
@@ -176,8 +191,8 @@ def database():
                     row['IDProvincia'], row['IDCCAA']
                 ])
                 
-                sql = """
-                    INSERT INTO menorca.benzineres 
+                sql = f"""
+                    INSERT INTO {secret.secret['db_name']}.benzineres 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
@@ -192,6 +207,10 @@ def database():
 
     except Error as e:
         print("Error connecting MySQL during table creation or data insertion:", e)
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
 
 if __name__ == "__main__":
     database()
