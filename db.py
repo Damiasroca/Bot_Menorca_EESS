@@ -2,8 +2,81 @@ import pandas as pd
 import numpy as np
 import mysql.connector as msql
 from mysql.connector import Error
+import datetime
+
+def backup_current_data():
+    """Backup current data to historical_prices table before updating"""
+    try:
+        conn = msql.connect(host='localhost', database='menorca', user='USER', password='PASSWORD')
+        if conn.is_connected():
+            cursor = conn.cursor()
+            
+            # Create historical_prices table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS historical_prices (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    date DATE NOT NULL,
+                    rotulo VARCHAR(255),
+                    localidad VARCHAR(255),
+                    direccion VARCHAR(255),
+                    latitud DECIMAL(10, 8),
+                    longitud_wgs84 DECIMAL(11, 8),
+                    precio_gasolina_95_e5 DECIMAL(5, 3),
+                    precio_gasoleo_a DECIMAL(5, 3),
+                    precio_gasoleo_b DECIMAL(5, 3),
+                    precio_gasoleo_premium DECIMAL(5, 3),
+                    precio_gases_licuados_del_petroleo DECIMAL(5, 3),
+                    INDEX idx_date (date),
+                    INDEX idx_localidad (localidad),
+                    INDEX idx_rotulo (rotulo)
+                )
+            """)
+            
+            # Check if we already have data for today
+            today = datetime.date.today()
+            cursor.execute("SELECT COUNT(*) FROM historical_prices WHERE date = %s", (today,))
+            count = cursor.fetchone()[0]
+            
+            if count == 0:
+                # Backup current data to historical table
+                backup_query = """
+                INSERT INTO historical_prices 
+                (date, rotulo, localidad, direccion, latitud, longitud_wgs84, 
+                 precio_gasolina_95_e5, precio_gasoleo_a, precio_gasoleo_b, 
+                 precio_gasoleo_premium, precio_gases_licuados_del_petroleo)
+                SELECT %s, `Rótulo`, Localidad, `Dirección`, 
+                       CAST(REPLACE(Latitud, ',', '.') AS DECIMAL(10,8)),
+                       CAST(REPLACE(`Longitud (WGS84)`, ',', '.') AS DECIMAL(11,8)),
+                       CAST(REPLACE(`Precio Gasolina 95 E5`, ',', '.') AS DECIMAL(5,3)),
+                       CAST(REPLACE(`Precio Gasoleo A`, ',', '.') AS DECIMAL(5,3)),
+                       CAST(REPLACE(`Precio Gasoleo B`, ',', '.') AS DECIMAL(5,3)),
+                       CAST(REPLACE(`Precio Gasoleo Premium`, ',', '.') AS DECIMAL(5,3)),
+                       CAST(REPLACE(`Precio Gases licuados del petróleo`, ',', '.') AS DECIMAL(5,3))
+                FROM benzineres 
+                WHERE `Precio Gasolina 95 E5` IS NOT NULL 
+                   OR `Precio Gasoleo A` IS NOT NULL
+                """
+                
+                try:
+                    cursor.execute(backup_query, (today,))
+                    conn.commit()
+                    print(f"Historical data backed up for {today}")
+                except Error as e:
+                    print(f"Note: Could not backup historical data (table might not exist yet): {e}")
+            else:
+                print(f"Historical data for {today} already exists")
+                
+    except Error as e:
+        print(f"Error during historical backup: {e}")
+    finally:
+        if conn.is_connected():
+            cursor.close()
+            conn.close()
 
 def database():
+    # First, backup current data for historical charts
+    backup_current_data()
+    
     estacions_data = pd.read_csv(r'/json_processing/combinat_per_importar.csvdata.csv')
     
     # Replace NaN values with None
@@ -40,6 +113,8 @@ def database():
             cursor.execute("select database();")
             record = cursor.fetchone()
             print("Connected to database: ", record)
+            
+            # Instead of dropping, truncate to preserve structure but clear data
             cursor.execute('DROP TABLE IF EXISTS benzineres')
             print('Creating table...')
             cursor.execute("""
@@ -106,20 +181,17 @@ def database():
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
-                # Print row and values for debugging
-                print(f"Row {i}: {row}")
-                print(f"Values: {values}")
-                print(f"Length of values: {len(values)}")
-
                 try:
                     cursor.execute(sql, values)
                     conn.commit()
                     print("Inserted row with ID:", row['ID'])
                 except Error as e:
                     print(f"Error inserting row {i} with ID {row['ID']}: {e}")
-                    print(f"Values causing the error: {values}")
+
+            print(f"✅ Data update completed. Historical data preserved for chart generation.")
 
     except Error as e:
         print("Error connecting MySQL during table creation or data insertion:", e)
 
-database()
+if __name__ == "__main__":
+    database()
