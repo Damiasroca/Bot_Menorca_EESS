@@ -19,11 +19,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 persistencia_arxiu
-index.json
-recoleccio_usuaris.py
-Original_main_bot.py
-csv_test.py
-populate_historical_data.py
+
+# Ignore bot persistence files
+*.pkl
+data/
+menorca_bot_persistence.pkl
 
 # Ignore build output
 dist/

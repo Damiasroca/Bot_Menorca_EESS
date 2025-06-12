@@ -1,0 +1,207 @@
+# Technical Description: Fuel Price Telegram Bot
+
+This document outlines the technical specifications of a Telegram bot designed to provide real-time fuel price information for a specific geographical region. The bot allows users to find the cheapest fuel, browse stations by location, set up price alerts, and view historical price trends.
+
+## 1. End-User Functionality
+
+From an end-user's perspective, the bot offers the following features:
+
+*   **Price Discovery:**
+    *   Find the 5 cheapest or most expensive gas stations in the entire region for a default fuel type.
+    *   Browse stations by fuel type, showing the top 5 cheapest for the selected fuel.
+    *   Browse stations by municipality/town, with paginated results.
+*   **Location-Based Search:**
+    *   Find gas stations within a 5km or 10km radius of the user's shared location.
+*   **Price Alerts:**
+    *   Create a price alert for a specific fuel type in a specific municipality. The user sets a target price, and the bot notifies them when the fuel price drops below that threshold.
+    *   View and delete active alerts.
+*   **Price History:**
+    *   View charts showing the price evolution (average, min, max) of major fuel types over the last 7 or 30 days.
+*   **Admin Panel (Restricted Access):**
+    *   View bot usage statistics (total users, active users, interactions).
+    *   Manage users (view recent users, get detailed info).
+    *   Broadcast messages to all bot users.
+    *   Check system and data health.
+
+## 2. System Architecture & Components
+
+The bot is a monolithic Python application structured around a few key components.
+
+### 2.1. File Organization
+
+```
+.
+├── main_bot_tenerife.py        # Main application: Telegram handlers, conversation logic.
+├── data_manager_tenerife.py    # Data layer: DB interaction, data processing, querying.
+├── constants_tenerife.py       # Configuration: All text, buttons, and location data.
+├── notification_sender.py      # Script for sending price alert notifications.
+├── secret.py                   # Secret management: API keys, DB credentials.
+├── requirements.txt            # Python dependencies.
+├── downloads_tenerife.sh       # Script to download raw data files.
+├── bot_tenerife_telegram_starter.sh # Service script to run the bot.
+└── municipis_original/         # Directory containing raw JSON data files.
+```
+
+### 2.2. Core Components
+
+**1. Main Application (`main_bot_tenerife.py`)**
+
+*   **Technology:** `python-telegram-bot`
+*   **Logic:** Implements the user-facing interaction logic.
+*   It uses a `ConversationHandler` to manage the user's state through the bot's menus.
+*   It defines handlers for commands (`/start`), callback queries (button clicks), and messages (text search).
+*   It is responsible for formatting data received from the Data Manager into user-friendly messages.
+*   It includes a robust admin system with decorator-based access control.
+
+**2. Data Manager (`data_manager_tenerife.py`)**
+
+*   **Technology:** `pandas`, `mysql-connector-python`, `SQLAlchemy`, `matplotlib`.
+*   **Responsibilities:**
+    *   **Database Management:** Establishes and manages a connection to a MySQL database. It can create the required database schema from scratch.
+    *   **Data Ingestion:** It does *not* connect to a live API. Instead, it reads pre-downloaded JSON files from a local directory (`municipis_original/`).
+    *   **Data Processing:** It parses these JSON files, cleans the data (e.g., converts comma-decimals to standard floats), and inserts it into the `estaciones_servicio` SQL table.
+    *   **Caching:** For performance, it loads the main station data from the SQL database into a `pandas` DataFrame to serve all real-time queries.
+    *   **Query Interface:** Provides methods for the main application to query the data (e.g., `get_stations_by_fuel_ascending`, `find_stations_near_location`).
+    *   **Historical Data:** Manages a `historical_prices` table. It includes a function (`store_daily_snapshot`) to be run on a schedule to record daily prices, which powers the chart generation.
+    *   **User/Alert Management:** Handles CRUD operations for users (`bot_users` table) and price alerts (`user_subscriptions` table).
+
+**3. Configuration (`constants_tenerife.py`)**
+
+*   This file acts as a centralized configuration hub. It is the primary file that needs to be modified for a new location.
+*   **Content:**
+    *   All user-facing strings (button labels, messages) in the bot's language.
+    *   A dictionary mapping all `MUNICIPALITIES` (or relevant administrative regions) for the target location.
+    *   A dictionary defining `FUEL_TYPES`, which maps internal names to display names and, most importantly, to the **column names in the source data file**.
+    *   Callback data strings and prefixes used for routing button clicks.
+    *   `ConversationHandler` state constants.
+
+**4. Secrets (`secret.py`)**
+
+*   A simple dictionary holding sensitive information:
+    *   Telegram Bot Token.
+    *   Database connection details (host, user, password, name).
+    *   A list of integer Telegram User IDs for admin access.
+
+### 2.3. External Services & Dependencies
+
+*   **Telegram Bot API:** The core service for all bot interactions.
+*   **Fuel Price Data Source:** The bot is designed to work with data from the Spanish Ministry of Industry, Commerce and Tourism. The data is provided as a set of JSON files, one for each municipality.
+*   **MySQL Database:** Required for persistent storage of all data (stations, historical prices, users, alerts).
+*   **Key Libraries (`requirements.txt`):**
+    *   `python-telegram-bot`: The Telegram Bot API wrapper.
+    *   `APScheduler`: Used by the `notification_sender.py` script to run scheduled tasks (checking for alerts).
+    *   `pandas` / `numpy`: For efficient in-memory data manipulation and querying.
+    *   `SQLAlchemy` / `mysql-connector-python`: For database connectivity.
+    *   `geopy`: For calculating distances in the "nearby stations" feature.
+    *   `matplotlib`: For generating the price history charts as PNG images.
+
+## 3. Logic and Behavior Flow
+
+### 3.1. Data Update Flow (Scheduled Task)
+
+1.  A cron job or systemd timer executes `downloads_tenerife.sh`.
+2.  This script downloads the latest fuel price JSON files from the government source into the `municipis_original/` directory.
+3.  The script then runs a Python command that calls the `TenerifeDataManager.load_json_data()` method.
+4.  This method clears the existing station data in the database and loads the new data from the JSON files.
+5.  After loading, it calls `store_daily_snapshot()` to save the current prices to the `historical_prices` table for that day.
+
+### 3.2. User Interaction Flow (Example: Find Stations by Municipality)
+
+1.  **User starts the bot (`/start`):** The `start()` handler in `main_bot_tenerife.py` sends the main menu with several `InlineKeyboardButton` options. The `ConversationHandler` enters `NIVELL1`.
+2.  **User clicks "Por MUNICIPIO":** A `CallbackQuery` is sent with the data `POBLE` (defined in constants).
+3.  **The `municipality_menu()` handler is triggered:** It generates a paginated list of municipality buttons using `get_municipality_buttons()`. It edits the existing message to show this new menu. The state moves to `NIVELL2`.
+4.  **User clicks a municipality button (e.g., "Arona"):** A `CallbackQuery` is sent with data like `'town_ARONA'`.
+5.  **The `municipality_info()` handler is triggered:**
+    *   It parses the municipality key (`'ARONA'`) from the callback data.
+    *   It calls `tenerife_data_manager.get_stations_by_municipality('ARONA')`.
+    *   The data manager queries its in-memory pandas DataFrame for stations in that municipality.
+    *   The handler receives the list of stations.
+    *   It iterates through the stations, formatting each one using `format_station_message()` to create a clean text representation with prices and a Google Maps link.
+    *   It edits the message to show the list of stations and adds pagination buttons ("Next") if there are more results. The state returns to `NIVELL1`.
+
+### 3.3. Price Alert Flow
+
+1.  **User creates an alert:** From a municipality view, the user can start the alert creation flow.
+2.  **State machine progression:** The `ConversationHandler` guides the user through selecting a fuel type and then inputting a target price. This uses the `ALERT_FUEL_SELECT` and `ALERT_PRICE_INPUT` states.
+3.  **Alert stored:** The `create_price_alert()` method in the data manager saves the user's ID, the chosen fuel type, the municipality, and the target price into the `user_subscriptions` table in the database.
+4.  **Scheduled check (`notification_sender.py`):**
+    *   A separate script, `notification_sender.py`, is run on a schedule (e.g., every 10 minutes) via cron.
+    *   It calls the `TenerifeDataManager.check_price_alerts()` method.
+    *   This method fetches all active alerts from the database.
+    *   For each alert, it queries the current minimum price for that fuel in that municipality.
+    *   If `current_price <= alert_threshold`, it adds the alert details to a list of notifications.
+    *   The `notification_sender.py` script receives this list.
+    *   It then iterates through the notifications and sends a message to each user via the Telegram API, informing them that their price target has been met.
+
+## 4. Adapting for a New Location
+
+To adapt this bot for a new region, the following changes are required, primarily focused on abstracting the location-specific components.
+
+**Critical Changes:**
+
+1.  **Create a new `constants_<location>.py` file:**
+    *   Translate all user-facing strings (`B1`, `M_INSTRUCT`, etc.) to the new language.
+    *   Replace the `MUNICIPALITIES` dictionary with the administrative regions of the new location.
+    *   **Crucially**, update the `FUEL_TYPES` dictionary. The `column` value for each fuel *must* match the corresponding column name/JSON key in the new data source.
+
+2.  **Adapt the Data Manager (`data_manager_tenerife.py`):**
+    *   **Data Source Logic:** The `load_json_data` method must be rewritten to handle the format of the new data source (e.g., if it's a single CSV file, a different JSON structure, or a live REST API).
+    *   **Database Schema:** The SQL table creation logic (`create_database_and_tables`) must be updated. The column names for prices must match the new `FUEL_TYPES` configuration.
+    *   **Data Cleaning:** The `_convert_decimal` function might need to be adjusted or removed depending on the number format in the new data source.
+
+3.  **Update `secret.py`:**
+    *   Change the `db_name` to something appropriate for the new location.
+
+4.  **Update Scripts:**
+    *   The `downloads_tenerife.sh` script must be rewritten to fetch data from the new source.
+    *   All scripts should be renamed to remove the `_tenerife` suffix for clarity.
+
+**Recommended Architectural Improvements for Generalization:**
+
+*   **Dependency Injection:** Instead of `main_bot_tenerife.py` importing constants directly, the main function should load the appropriate constants file and pass it as a configuration object to the handlers.
+*   **Data Manager Abstraction:** Create a base `DataManager` class with abstract methods (`get_stations_by_region`, etc.). The current `TenerifeDataManager` would become a specific implementation of this base class. This would make it much cleaner to plug in a new data source by simply writing a new `DataManager` implementation.
+
+## 5. Detailed Data Management Pipeline
+
+This section provides a deeper look into how data is ingested, stored, and retrieved by the `TenerifeDataManager`.
+
+### 5.1. Phase 1: Data Ingestion and Database Population
+
+The entire data update process is initiated by calling the `load_json_data()` method in `data_manager_tenerife.py`.
+
+1.  **File Discovery:** The method starts by scanning the `municipis_original/` directory for all files ending in `.json` using `glob.glob("municipis_original/*.json")`.
+
+2.  **Table Truncation:** Before inserting new data, the `estaciones_servicio` table is cleared using a `DELETE FROM estaciones_servicio` command. This ensures that the data reflects the latest snapshot and removes any stations that may no longer be listed.
+
+3.  **Iterative Processing:** The code iterates through each discovered JSON file.
+    *   The file is opened and its content is loaded into a Python dictionary using `json.load()`.
+    *   The core data is expected under the key `'ListaEESSPrecio'`, which contains a list of station objects.
+
+4.  **Row-by-Row Insertion:** The code then iterates through each station object in the `ListaEESSPrecio` list.
+    *   **Data Cleaning:** For each station, numeric price values are passed through the `_convert_decimal()` helper function. This function is critical for handling the Spanish data format, as it replaces the comma (`,`) decimal separator with a period (`.`) so it can be correctly stored in the MySQL `DECIMAL` columns. It also handles `None` or empty string values, converting them to `NULL` for the database.
+    *   **SQL Insertion with Upsert Logic:** A parameterized `INSERT` query is executed for each station. A key feature is the `ON DUPLICATE KEY UPDATE` clause. The `IDEESS` (station ID) column has a `UNIQUE` index.
+        *   If a station with a given `IDEESS` does not exist, a new row is inserted.
+        *   If a station with that `IDEESS` *already exists* (which is unlikely given the table is cleared, but provides robustness), its record is updated with the new values from the current JSON file. This is known as an "upsert" operation.
+
+5.  **Transaction Commit:** After processing all files and all stations, the changes are committed to the database using `self.connection.commit()`.
+
+### 5.2. Phase 2: In-Memory Caching for Live Queries
+
+Once the data is in the database, it's not queried directly from the DB for most user requests. Instead, it's loaded into an in-memory cache for speed.
+
+1.  **Loading into Pandas:** The `load_data_from_db()` method is called at bot startup or when data is needed and not yet loaded.
+2.  **SQL Query:** It executes a simple `SELECT * FROM estaciones_servicio` query against the database.
+3.  **DataFrame Creation:** The results of the query are loaded directly into a pandas DataFrame and stored in the `self.data` attribute of the `TenerifeDataManager` instance (`self.data = pd.read_sql(query, self.sqlalchemy_engine)`).
+
+### 5.3. Phase 3: Data Retrieval for User Requests
+
+When a user interacts with the bot (e.g., asking for the cheapest gas stations), the application calls a retrieval method on the `TenerifeDataManager`.
+
+1.  **Handler Calls Manager:** For example, the `cheapest_stations()` handler in `main_bot_tenerife.py` calls `tenerife_data_manager.get_stations_by_fuel_ascending('GASOLINA_95_E5')`.
+
+2.  **Querying the DataFrame:** The `get_stations_by_fuel_ascending()` method does *not* issue a new SQL query. Instead, it performs operations on the pre-loaded pandas DataFrame (`self.data`).
+    *   It filters the DataFrame to find rows where the price for the requested fuel is not null and is greater than zero: `self.data[self.data[column_name].notna() & (self.data[column_name] > 0)]`.
+    *   It then sorts this filtered DataFrame by the price column: `.sort_values(by=column_name, ascending=True)`.
+    *   Finally, it returns the top results (e.g., `.head(limit)`).
+
+This approach of using a pandas DataFrame as an in-memory cache is highly efficient and significantly reduces database load, allowing the bot to respond to user queries almost instantly. 
