@@ -1,5 +1,4 @@
 # Main Telegram Bot Application for Menorca Fuel Prices
-# Following the architecture described in technical_description.txt
 
 import os
 import sys
