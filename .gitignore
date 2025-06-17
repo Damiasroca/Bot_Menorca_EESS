@@ -24,6 +24,9 @@ persistencia_arxiu
 *.pkl
 data/
 menorca_bot_persistence.pkl
+sample_db.txt
+technical_description.txt
+FILE_MANAGEMENT_GUIDE.md
 
 # Ignore build output
 dist/
